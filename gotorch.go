@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 type Tensor struct {
@@ -82,7 +83,7 @@ func (op MatMulOp) Backward(t *Tensor) {
 				for j := 0; j < N; j++ {
 					sum += t.Grad[i*N+j] * b.Data[k*N+j]
 				}
-				atomic.AddFloat64(&a.Grad[i*K+k], sum) // Thread-safe
+				AtomicAddFloat64(&a.Grad[i*K+k], sum) // Thread-safe
 			}
 		}
 	}
@@ -93,7 +94,7 @@ func (op MatMulOp) Backward(t *Tensor) {
 				for i := 0; i < M; i++ {
 					sum += a.Data[i*K+k] * t.Grad[i*N+j]
 				}
-				atomic.AddFloat64(&b.Grad[k*N+j], sum) // Thread-safe
+				AtomicAddFloat64(&b.Grad[k*N+j], sum) // Thread-safe
 			}
 		}
 	}
@@ -133,7 +134,7 @@ func (op EmbeddingOp) Backward(t *Tensor) {
 		for i, idxFloat := range indices.Data {
 			idx := int(idxFloat)
 			for k := 0; k < dim; k++ {
-				atomic.AddFloat64(&weights.Grad[idx*dim+k], t.Grad[i*dim+k])
+				AtomicAddFloat64(&weights.Grad[idx*dim+k], t.Grad[i*dim+k])
 			}
 		}
 	}
@@ -159,7 +160,7 @@ func (op ReLUOp) Backward(t *Tensor) {
 	if input.ReqGrad {
 		for i, val := range input.Data {
 			if val > 0 {
-				atomic.AddFloat64(&input.Grad[i], t.Grad[i])
+				AtomicAddFloat64(&input.Grad[i], t.Grad[i])
 			}
 		}
 	}
@@ -232,8 +233,8 @@ func (op HSLossOp) Backward(t *Tensor) {
 		prob := 1.0 / (1.0 + math.Exp(-score))
 		grad := prob - path.Directions[i]
 		for k := range node.Weight.Data {
-			atomic.AddFloat64(&node.Weight.Grad[k], grad*hidden.Data[k])
-			atomic.AddFloat64(&hidden.Grad[k], grad*node.Weight.Data[k])
+			AtomicAddFloat64(&node.Weight.Grad[k], grad*hidden.Data[k])
+			AtomicAddFloat64(&hidden.Grad[k], grad*node.Weight.Data[k])
 		}
 	}
 }
@@ -257,4 +258,22 @@ func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
 	res.Op = HSLossOp{HS: hs, Target: targetID}
 	res.Parents = []*Tensor{hidden}
 	return res
+}
+
+// AtomicAddFloat64 adds delta to the value at addr safely across threads.
+func AtomicAddFloat64(addr *float64, delta float64) {
+	for {
+		// 1. Read the current value as bits (uint64)
+		oldBits := atomic.LoadUint64((*uint64)(unsafe.Pointer(addr)))
+
+		// 2. Convert to float, do the math
+		newVal := math.Float64frombits(oldBits) + delta
+		newBits := math.Float64bits(newVal)
+
+		// 3. Attempt to swap. If another thread changed the value
+		//    in the meantime, this returns false and the loop retries.
+		if atomic.CompareAndSwapUint64((*uint64)(unsafe.Pointer(addr)), oldBits, newBits) {
+			return
+		}
+	}
 }
