@@ -329,3 +329,130 @@ func CrossEntropy(logits, target *Tensor) *Tensor {
 	res.Parents = []*Tensor{logits, target}
 	return res
 }
+
+// ============================================================================
+// HIERARCHICAL SOFTMAX COMPONENTS
+// ============================================================================
+
+// HSNode represents an internal node in the Hierarchical Softmax binary tree.
+type HSNode struct {
+	ID     int
+	Weight *Tensor // The learned vector for this specific binary decision
+}
+
+// HSPath defines the route from root to a specific word (leaf).
+type HSPath struct {
+	Nodes      []*HSNode // Sequence of nodes to visit
+	Directions []float64 // +1 for Left, -1 for Right (or 1 and 0 for sigmoid targets)
+}
+
+// HierarchicalSoftmax manages the tree structure for efficient large-vocab training.
+type HierarchicalSoftmax struct {
+	Nodes []*HSNode
+	Paths map[int]HSPath
+}
+
+// NewHierarchicalSoftmax builds a balanced binary tree for the given vocabulary.
+func NewHierarchicalSoftmax(vocabSize int, hiddenDim int) *HierarchicalSoftmax {
+	numInternalNodes := vocabSize - 1
+	hs := &HierarchicalSoftmax{
+		Nodes: make([]*HSNode, numInternalNodes),
+		Paths: make(map[int]HSPath),
+	}
+
+	// Initialize all internal decision nodes with weights
+	for i := 0; i < numInternalNodes; i++ {
+		hs.Nodes[i] = &HSNode{
+			ID:     i,
+			Weight: NewTensor(nil, []int{1, hiddenDim}, true),
+		}
+	}
+
+	// Build a balanced binary tree mapping: WordID -> Path
+	// This uses a standard binary heap-style indexing for simplicity
+	for wordID := 0; wordID < vocabSize; wordID++ {
+		path := HSPath{}
+		// Current "leaf" position in a complete binary tree
+		curr := wordID + vocabSize - 1
+
+		for curr > 0 {
+			parent := (curr - 1) / 2
+			path.Nodes = append([]*HSNode{hs.Nodes[parent]}, path.Nodes...)
+
+			// If curr is left child (odd), target is 1. If right (even), target is 0.
+			if curr%2 == 1 {
+				path.Directions = append([]float64{1.0}, path.Directions...)
+			} else {
+				path.Directions = append([]float64{0.0}, path.Directions...)
+			}
+			curr = parent
+		}
+		hs.Paths[wordID] = path
+	}
+	return hs
+}
+
+// --- HS Loss Operation ---
+
+type HSLossOp struct {
+	HS     *HierarchicalSoftmax
+	Target int
+}
+
+func (op HSLossOp) Backward(t *Tensor) {
+	hidden := t.Parents[0]
+	path := op.HS.Paths[op.Target]
+
+	if hidden.ReqGrad {
+		for i, node := range path.Nodes {
+			// Re-calculate sigmoid during backward
+			// P(left) = sigmoid(node.Weight @ hidden)
+			score := 0.0
+			for k := range hidden.Data {
+				score += node.Weight.Data[k] * hidden.Data[k]
+			}
+			prob := 1.0 / (1.0 + math.Exp(-score))
+
+			// Gradient of Log-Sigmoid is (Target - Prob)
+			grad := prob - path.Directions[i]
+
+			// Update Node Weights
+			for k := range node.Weight.Data {
+				node.Weight.Grad[k] += grad * hidden.Data[k]
+				// Pass gradient back to hidden state
+				hidden.Grad[k] += grad * node.Weight.Data[k]
+			}
+		}
+	}
+}
+
+// HSLoss calculates the Negative Log Likelihood using the Hierarchical tree.
+// Complexity: O(log VocabSize) instead of O(VocabSize).
+func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
+	path := hs.Paths[targetID]
+	totalLoss := 0.0
+
+	for i, node := range path.Nodes {
+		// dot product: node.Weight @ hidden
+		score := 0.0
+		for k := range hidden.Data {
+			score += node.Weight.Data[k] * hidden.Data[k]
+		}
+
+		// Sigmoid: 1 / (1 + exp(-score))
+		prob := 1.0 / (1.0 + math.Exp(-score))
+
+		// Cross Entropy for this binary decision
+		target := path.Directions[i]
+		if target == 1.0 {
+			totalLoss -= math.Log(prob + 1e-9)
+		} else {
+			totalLoss -= math.Log(1.0 - prob + 1e-9)
+		}
+	}
+
+	res := NewTensor([]float64{totalLoss}, []int{1}, hidden.ReqGrad)
+	res.Op = HSLossOp{HS: hs, Target: targetID}
+	res.Parents = []*Tensor{hidden}
+	return res
+}
