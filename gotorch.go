@@ -1,7 +1,6 @@
 package gotorch
 
 import (
-	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -22,35 +21,49 @@ type Operation interface {
 
 func NewTensor(data []float64, shape []int, reqGrad bool) *Tensor {
 	size := 1
-	for _, dim := range shape { size *= dim }
-	if data == nil { data = make([]float64, size) }
+	for _, dim := range shape {
+		size *= dim
+	}
+	if data == nil {
+		data = make([]float64, size)
+	}
 	t := &Tensor{Data: data, Shape: shape, ReqGrad: reqGrad}
-	if reqGrad { t.Grad = make([]float64, size) }
+	if reqGrad {
+		t.Grad = make([]float64, size)
+	}
 	return t
 }
 
 func (t *Tensor) ZeroGrad() {
 	if t.Grad != nil {
-		for i := range t.Grad { t.Grad[i] = 0 }
+		for i := range t.Grad {
+			t.Grad[i] = 0
+		}
 	}
 }
 
 func (t *Tensor) Backward() {
-	if t.Grad == nil { t.Grad = []float64{1.0} }
+	if t.Grad == nil {
+		t.Grad = []float64{1.0}
+	}
 	order := []*Tensor{}
 	visited := make(map[*Tensor]bool)
 	var build func(*Tensor)
 	build = func(v *Tensor) {
 		if !visited[v] {
 			visited[v] = true
-			for _, p := range v.Parents { build(p) }
+			for _, p := range v.Parents {
+				build(p)
+			}
 			order = append(order, v)
 		}
 	}
 	build(t)
 	for i := len(order) - 1; i >= 0; i-- {
 		node := order[i]
-		if node.Op != nil { node.Op.Backward(node) }
+		if node.Op != nil {
+			node.Op.Backward(node)
+		}
 	}
 }
 
@@ -106,7 +119,8 @@ func MatMul(a, b *Tensor) *Tensor {
 	}
 	wg.Wait()
 	res := NewTensor(out, []int{M, N}, a.ReqGrad || b.ReqGrad)
-	res.Op = MatMulOp{}; res.Parents = []*Tensor{a, b}
+	res.Op = MatMulOp{}
+	res.Parents = []*Tensor{a, b}
 	return res
 }
 
@@ -133,7 +147,8 @@ func Embed(weights, indices *Tensor) *Tensor {
 		copy(out[i*dim:(i+1)*dim], weights.Data[idx*dim:(idx+1)*dim])
 	}
 	res := NewTensor(out, []int{batch, dim}, weights.ReqGrad)
-	res.Op = EmbeddingOp{}; res.Parents = []*Tensor{weights, indices}
+	res.Op = EmbeddingOp{}
+	res.Parents = []*Tensor{weights, indices}
 	return res
 }
 
@@ -143,24 +158,40 @@ func (op ReLUOp) Backward(t *Tensor) {
 	input := t.Parents[0]
 	if input.ReqGrad {
 		for i, val := range input.Data {
-			if val > 0 { atomic.AddFloat64(&input.Grad[i], t.Grad[i]) }
+			if val > 0 {
+				atomic.AddFloat64(&input.Grad[i], t.Grad[i])
+			}
 		}
 	}
 }
 
 func ReLU(t *Tensor) *Tensor {
 	out := make([]float64, len(t.Data))
-	for i, v := range t.Data { if v > 0 { out[i] = v } }
+	for i, v := range t.Data {
+		if v > 0 {
+			out[i] = v
+		}
+	}
 	res := NewTensor(out, t.Shape, t.ReqGrad)
-	res.Op = ReLUOp{}; res.Parents = []*Tensor{t}
+	res.Op = ReLUOp{}
+	res.Parents = []*Tensor{t}
 	return res
 }
 
 // --- Hierarchical Softmax ---
 
-type HSNode struct { ID int; Weight *Tensor }
-type HSPath struct { Nodes []*HSNode; Directions []float64 }
-type HierarchicalSoftmax struct { Nodes []*HSNode; Paths map[int]HSPath }
+type HSNode struct {
+	ID     int
+	Weight *Tensor
+}
+type HSPath struct {
+	Nodes      []*HSNode
+	Directions []float64
+}
+type HierarchicalSoftmax struct {
+	Nodes []*HSNode
+	Paths map[int]HSPath
+}
 
 func NewHierarchicalSoftmax(vocabSize, hiddenDim int) *HierarchicalSoftmax {
 	hs := &HierarchicalSoftmax{Nodes: make([]*HSNode, vocabSize-1), Paths: make(map[int]HSPath)}
@@ -168,11 +199,15 @@ func NewHierarchicalSoftmax(vocabSize, hiddenDim int) *HierarchicalSoftmax {
 		hs.Nodes[i] = &HSNode{ID: i, Weight: NewTensor(nil, []int{1, hiddenDim}, true)}
 	}
 	for wordID := 0; wordID < vocabSize; wordID++ {
-		path := HSPath{}; curr := wordID + vocabSize - 1
+		path := HSPath{}
+		curr := wordID + vocabSize - 1
 		for curr > 0 {
 			parent := (curr - 1) / 2
 			path.Nodes = append([]*HSNode{hs.Nodes[parent]}, path.Nodes...)
-			dir := 0.0; if curr%2 == 1 { dir = 1.0 }
+			dir := 0.0
+			if curr%2 == 1 {
+				dir = 1.0
+			}
 			path.Directions = append([]float64{dir}, path.Directions...)
 			curr = parent
 		}
@@ -181,32 +216,45 @@ func NewHierarchicalSoftmax(vocabSize, hiddenDim int) *HierarchicalSoftmax {
 	return hs
 }
 
-type HSLossOp struct { HS *HierarchicalSoftmax; Target int }
+type HSLossOp struct {
+	HS     *HierarchicalSoftmax
+	Target int
+}
 
 func (op HSLossOp) Backward(t *Tensor) {
 	hidden := t.Parents[0]
 	path := op.HS.Paths[op.Target]
 	for i, node := range path.Nodes {
 		var score float64
-		for k := range hidden.Data { score += node.Weight.Data[k] * hidden.Data[k] }
+		for k := range hidden.Data {
+			score += node.Weight.Data[k] * hidden.Data[k]
+		}
 		prob := 1.0 / (1.0 + math.Exp(-score))
 		grad := prob - path.Directions[i]
 		for k := range node.Weight.Data {
-			atomic.AddFloat64(&node.Weight.Grad[k], grad * hidden.Data[k])
-			atomic.AddFloat64(&hidden.Grad[k], grad * node.Weight.Data[k])
+			atomic.AddFloat64(&node.Weight.Grad[k], grad*hidden.Data[k])
+			atomic.AddFloat64(&hidden.Grad[k], grad*node.Weight.Data[k])
 		}
 	}
 }
 
 func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
-	path := hs.Paths[targetID]; loss := 0.0
+	path := hs.Paths[targetID]
+	loss := 0.0
 	for i, node := range path.Nodes {
 		var score float64
-		for k := range hidden.Data { score += node.Weight.Data[k] * hidden.Data[k] }
+		for k := range hidden.Data {
+			score += node.Weight.Data[k] * hidden.Data[k]
+		}
 		prob := 1.0 / (1.0 + math.Exp(-score))
-		if path.Directions[i] == 1.0 { loss -= math.Log(prob + 1e-9) } else { loss -= math.Log(1.0 - prob + 1e-9) }
+		if path.Directions[i] == 1.0 {
+			loss -= math.Log(prob + 1e-9)
+		} else {
+			loss -= math.Log(1.0 - prob + 1e-9)
+		}
 	}
 	res := NewTensor([]float64{loss}, []int{1}, true)
-	res.Op = HSLossOp{HS: hs, Target: targetID}; res.Parents = []*Tensor{hidden}
+	res.Op = HSLossOp{HS: hs, Target: targetID}
+	res.Parents = []*Tensor{hidden}
 	return res
 }
