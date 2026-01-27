@@ -1,16 +1,18 @@
 package gotorch
 
 import (
+	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
 type Tensor struct {
-	Data    []float64
+	Data    []float32
 	Shape   []int
-	Grad    []float64
+	Grad    []float32
 	Parents []*Tensor
 	Op      Operation
 	ReqGrad bool
@@ -20,17 +22,17 @@ type Operation interface {
 	Backward(t *Tensor)
 }
 
-func NewTensor(data []float64, shape []int, reqGrad bool) *Tensor {
+func NewTensor(data []float32, shape []int, reqGrad bool) *Tensor {
 	size := 1
 	for _, dim := range shape {
 		size *= dim
 	}
 	if data == nil {
-		data = make([]float64, size)
+		data = make([]float32, size)
 	}
 	t := &Tensor{Data: data, Shape: shape, ReqGrad: reqGrad}
 	if reqGrad {
-		t.Grad = make([]float64, size)
+		t.Grad = make([]float32, size)
 	}
 	return t
 }
@@ -45,7 +47,7 @@ func (t *Tensor) ZeroGrad() {
 
 func (t *Tensor) Backward() {
 	if t.Grad == nil {
-		t.Grad = []float64{1.0}
+		t.Grad = []float32{1.0}
 	}
 	order := []*Tensor{}
 	visited := make(map[*Tensor]bool)
@@ -79,45 +81,80 @@ func (op MatMulOp) Backward(t *Tensor) {
 	if a.ReqGrad {
 		for i := 0; i < M; i++ {
 			for k := 0; k < K; k++ {
-				var sum float64
+				var sum float32
 				for j := 0; j < N; j++ {
 					sum += t.Grad[i*N+j] * b.Data[k*N+j]
 				}
-				AtomicAddFloat64(&a.Grad[i*K+k], sum) // Thread-safe
+				AtomicAddFloat32(&a.Grad[i*K+k], sum)
 			}
 		}
 	}
 	if b.ReqGrad {
 		for k := 0; k < K; k++ {
 			for j := 0; j < N; j++ {
-				var sum float64
+				var sum float32
 				for i := 0; i < M; i++ {
 					sum += a.Data[i*K+k] * t.Grad[i*N+j]
 				}
-				AtomicAddFloat64(&b.Grad[k*N+j], sum) // Thread-safe
+				AtomicAddFloat32(&b.Grad[k*N+j], sum)
 			}
 		}
 	}
 }
 
 func MatMul(a, b *Tensor) *Tensor {
-	M, K, N := a.Shape[0], a.Shape[1], b.Shape[1]
-	out := make([]float64, M*N)
-	var wg sync.WaitGroup
-	// Parallelize rows
-	for i := 0; i < M; i++ {
-		wg.Add(1)
-		go func(r int) {
-			defer wg.Done()
-			for j := 0; j < N; j++ {
-				var sum float64
-				for k := 0; k < K; k++ {
-					sum += a.Data[r*K+k] * b.Data[k*N+j]
-				}
-				out[r*N+j] = sum
-			}
-		}(i)
+	if a.Shape[1] != b.Shape[0] {
+		panic(fmt.Sprintf("Shape mismatch: %v vs %v", a.Shape, b.Shape))
 	}
+
+	M, K, N := a.Shape[0], a.Shape[1], b.Shape[1]
+
+	// 1. Transpose B so we can access it sequentially (Row-Major)
+	bT := Transpose(b)
+
+	out := make([]float32, M*N)
+
+	// 2. Setup Worker Pool
+	numCPU := runtime.GOMAXPROCS(0)
+	var wg sync.WaitGroup
+
+	chunkSize := (M + numCPU - 1) / numCPU
+
+	for w := 0; w < numCPU; w++ {
+		startRow := w * chunkSize
+		endRow := startRow + chunkSize
+		if startRow >= M {
+			break
+		}
+		if endRow > M {
+			endRow = M
+		}
+
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			for i := start; i < end; i++ {
+				rowOffsetA := i * K
+				for j := 0; j < N; j++ {
+					rowOffsetB := j * K
+					var sum float32
+
+					k := 0
+					for ; k <= K-4; k += 4 {
+						sum += a.Data[rowOffsetA+k] * bT.Data[rowOffsetB+k]
+						sum += a.Data[rowOffsetA+k+1] * bT.Data[rowOffsetB+k+1]
+						sum += a.Data[rowOffsetA+k+2] * bT.Data[rowOffsetB+k+2]
+						sum += a.Data[rowOffsetA+k+3] * bT.Data[rowOffsetB+k+3]
+					}
+					for ; k < K; k++ {
+						sum += a.Data[rowOffsetA+k] * bT.Data[rowOffsetB+k]
+					}
+					out[i*N+j] = sum
+				}
+			}
+		}(startRow, endRow)
+	}
+
 	wg.Wait()
 	res := NewTensor(out, []int{M, N}, a.ReqGrad || b.ReqGrad)
 	res.Op = MatMulOp{}
@@ -134,7 +171,7 @@ func (op EmbeddingOp) Backward(t *Tensor) {
 		for i, idxFloat := range indices.Data {
 			idx := int(idxFloat)
 			for k := 0; k < dim; k++ {
-				AtomicAddFloat64(&weights.Grad[idx*dim+k], t.Grad[i*dim+k])
+				AtomicAddFloat32(&weights.Grad[idx*dim+k], t.Grad[i*dim+k])
 			}
 		}
 	}
@@ -142,7 +179,7 @@ func (op EmbeddingOp) Backward(t *Tensor) {
 
 func Embed(weights, indices *Tensor) *Tensor {
 	batch, dim := indices.Shape[0], weights.Shape[1]
-	out := make([]float64, batch*dim)
+	out := make([]float32, batch*dim)
 	for i, idxFloat := range indices.Data {
 		idx := int(idxFloat)
 		copy(out[i*dim:(i+1)*dim], weights.Data[idx*dim:(idx+1)*dim])
@@ -160,14 +197,14 @@ func (op ReLUOp) Backward(t *Tensor) {
 	if input.ReqGrad {
 		for i, val := range input.Data {
 			if val > 0 {
-				AtomicAddFloat64(&input.Grad[i], t.Grad[i])
+				AtomicAddFloat32(&input.Grad[i], t.Grad[i])
 			}
 		}
 	}
 }
 
 func ReLU(t *Tensor) *Tensor {
-	out := make([]float64, len(t.Data))
+	out := make([]float32, len(t.Data))
 	for i, v := range t.Data {
 		if v > 0 {
 			out[i] = v
@@ -187,7 +224,7 @@ type HSNode struct {
 }
 type HSPath struct {
 	Nodes      []*HSNode
-	Directions []float64
+	Directions []float32
 }
 type HierarchicalSoftmax struct {
 	Nodes []*HSNode
@@ -205,11 +242,11 @@ func NewHierarchicalSoftmax(vocabSize, hiddenDim int) *HierarchicalSoftmax {
 		for curr > 0 {
 			parent := (curr - 1) / 2
 			path.Nodes = append([]*HSNode{hs.Nodes[parent]}, path.Nodes...)
-			dir := 0.0
+			dir := float32(0.0)
 			if curr%2 == 1 {
 				dir = 1.0
 			}
-			path.Directions = append([]float64{dir}, path.Directions...)
+			path.Directions = append([]float32{dir}, path.Directions...)
 			curr = parent
 		}
 		hs.Paths[wordID] = path
@@ -226,15 +263,18 @@ func (op HSLossOp) Backward(t *Tensor) {
 	hidden := t.Parents[0]
 	path := op.HS.Paths[op.Target]
 	for i, node := range path.Nodes {
-		var score float64
+		var score float32
 		for k := range hidden.Data {
 			score += node.Weight.Data[k] * hidden.Data[k]
 		}
-		prob := 1.0 / (1.0 + math.Exp(-score))
-		grad := prob - path.Directions[i]
+
+		prob := 1.0 / (1.0 + math.Exp(float64(-score)))
+
+		grad := float32(prob) - path.Directions[i]
+
 		for k := range node.Weight.Data {
-			AtomicAddFloat64(&node.Weight.Grad[k], grad*hidden.Data[k])
-			AtomicAddFloat64(&hidden.Grad[k], grad*node.Weight.Data[k])
+			AtomicAddFloat32(&node.Weight.Grad[k], grad*hidden.Data[k])
+			AtomicAddFloat32(&hidden.Grad[k], grad*node.Weight.Data[k])
 		}
 	}
 }
@@ -243,37 +283,44 @@ func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
 	path := hs.Paths[targetID]
 	loss := 0.0
 	for i, node := range path.Nodes {
-		var score float64
+		var score float32
 		for k := range hidden.Data {
 			score += node.Weight.Data[k] * hidden.Data[k]
 		}
-		prob := 1.0 / (1.0 + math.Exp(-score))
+
+		prob := 1.0 / (1.0 + math.Exp(float64(-score)))
+
 		if path.Directions[i] == 1.0 {
 			loss -= math.Log(prob + 1e-9)
 		} else {
 			loss -= math.Log(1.0 - prob + 1e-9)
 		}
 	}
-	res := NewTensor([]float64{loss}, []int{1}, true)
+	res := NewTensor([]float32{float32(loss)}, []int{1}, true)
 	res.Op = HSLossOp{HS: hs, Target: targetID}
 	res.Parents = []*Tensor{hidden}
 	return res
 }
 
-// AtomicAddFloat64 adds delta to the value at addr safely across threads.
-func AtomicAddFloat64(addr *float64, delta float64) {
+func AtomicAddFloat32(addr *float32, delta float32) {
 	for {
-		// 1. Read the current value as bits (uint64)
-		oldBits := atomic.LoadUint64((*uint64)(unsafe.Pointer(addr)))
-
-		// 2. Convert to float, do the math
-		newVal := math.Float64frombits(oldBits) + delta
-		newBits := math.Float64bits(newVal)
-
-		// 3. Attempt to swap. If another thread changed the value
-		//    in the meantime, this returns false and the loop retries.
-		if atomic.CompareAndSwapUint64((*uint64)(unsafe.Pointer(addr)), oldBits, newBits) {
+		oldBits := atomic.LoadUint32((*uint32)(unsafe.Pointer(addr)))
+		oldVal := math.Float32frombits(oldBits)
+		newVal := oldVal + delta
+		newBits := math.Float32bits(newVal)
+		if atomic.CompareAndSwapUint32((*uint32)(unsafe.Pointer(addr)), oldBits, newBits) {
 			return
 		}
 	}
+}
+
+func Transpose(t *Tensor) *Tensor {
+	rows, cols := t.Shape[0], t.Shape[1]
+	out := make([]float32, rows*cols)
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			out[c*rows+r] = t.Data[r*cols+c]
+		}
+	}
+	return NewTensor(out, []int{cols, rows}, t.ReqGrad)
 }
