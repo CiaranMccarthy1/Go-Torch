@@ -9,14 +9,14 @@ A lightweight deep learning framework in Go, supporting autograd and efficient t
 
 - **Autograd**: Automatic differentiation engine.
 - **Tensors**: N-dimensional arrays with gradient support.
-- **Backend Abstraction**: Pluggable backend interface with CPU backend as the default.
+- **Backend Abstraction**: Storage-first backend interface with CPU backend as the default.
 - **Operations**:
 	- Matrix Multiplication (cache-aware, concurrent)
   - Transpose
   - Activations (ReLU)
   - Embeddings
   - Hierarchical Softmax
-- **Zero Dependencies**: Pure Go standard library (uses `unsafe` and `sync/atomic` for performance).
+- **Zero Dependencies**: Pure Go standard library.
 
 ## Installation
 
@@ -31,7 +31,7 @@ package main
 
 import (
 	"fmt"
-	gt "github.com/CiaranMccarthy1/go-torch"
+	gt "github.com/CiaranMccarthy1/go-torch/src"
 )
 
 func main() {
@@ -41,12 +41,13 @@ func main() {
 
 	// Multiply
 	C := gt.MatMul(A, B)
+	fmt.Println(C.Data())
 
 	// Backprop
-	C.Grad = []float32{1, 1, 1, 1}
+	C.SetGrad([]float32{1, 1, 1, 1})
 	C.Backward()
 
-	fmt.Println(A.Grad)
+	fmt.Println(A.Grad())
 }
 ```
 
@@ -54,22 +55,30 @@ func main() {
 
 - `tensor.go`: Core data structure.
 - `backend.go`: Backend interface, storage abstraction, and CPU backend implementation.
+- `webgpu_backend.go`: WebGPU backend scaffold and availability guard.
 - `autograd.go`: Backward pass engine.
 - `ops_*.go`: Mathematical operations and layers.
 - `examples/`: runnable examples.
 
 ## Architecture Notes
 
-- `Tensor` keeps the existing public fields (`Data`, `Shape`, `Grad`, etc.) for backward compatibility.
-- Tensor allocation now routes through a `Backend` interface, with `CPUBackend` configured as default.
-- Operation dispatch for `MatMul` and `Transpose` is now backend-driven, so alternate backends can be added without changing public APIs.
+- `Tensor` stores data and gradients in `TensorStorage` (`storage` and `gradStorage`) instead of raw slices.
+- Host access is explicit through `Data()` and `Grad()`, while host-to-device gradient injection uses `SetGrad(...)`.
+- Backend interfaces now use `TensorStorage` end to end (`MatMul`, `Transpose`, `ReLU`, `Embed`, in-place accumulation, and Adam step).
 - CPU `MatMul` forward and backward use block-based loops and row/column partitioned workers to improve cache locality and reduce write contention.
+
+## WebGPU Note
+
+- `WebGPUBackend` is scaffolded but intentionally unavailable in this pure-Go build.
+- `NewWebGPUBackend()` currently returns an error explaining that cgo and a native WebGPU bridge (Dawn or wgpu-native) are required.
 
 ## Regression Coverage
 
 - `TestCPUBackendDefault`: verifies CPU remains the default backend.
 - `TestMatMulForwardMatchesNaive`: checks numerical parity with a naive implementation.
 - `TestMatMulBackwardFiniteDifference`: validates gradients against finite differences.
+- `TestReLUForwardBackward`: validates backend-dispatched ReLU forward and gradient flow.
+- `TestEmbeddingForwardBackward`: validates embedding gather and weight gradient accumulation.
 
 Run with:
 
@@ -89,10 +98,10 @@ Latest local results:
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkMatMulForward_128x128x128-8` | 415092 | 131849 | 24 |
-| `BenchmarkMatMulForward_256x256x256-8` | 3491172 | 525067 | 24 |
-| `BenchmarkMatMulBackward_128x128x128-8` | 1849093 | 460709 | 68 |
-| `BenchmarkMatMulBackward_256x256x256-8` | 9152327 | 1836979 | 68 |
+| `BenchmarkMatMulForward_128x128x128-8` | 424145 | 131840 | 25 |
+| `BenchmarkMatMulForward_256x256x256-8` | 2682502 | 525059 | 25 |
+| `BenchmarkMatMulBackward_128x128x128-8` | 1227620 | 460968 | 74 |
+| `BenchmarkMatMulBackward_256x256x256-8` | 8545213 | 1840809 | 74 |
 
 ## Contributing
 
