@@ -98,10 +98,10 @@ Latest local results:
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkMatMulForward_128x128x128-8` | 424145 | 131840 | 25 |
-| `BenchmarkMatMulForward_256x256x256-8` | 2682502 | 525059 | 25 |
-| `BenchmarkMatMulBackward_128x128x128-8` | 1227620 | 460968 | 74 |
-| `BenchmarkMatMulBackward_256x256x256-8` | 8545213 | 1840809 | 74 |
+| `BenchmarkMatMulForward_128x128x128-8` | 571642 | 131876 | 25 |
+| `BenchmarkMatMulForward_256x256x256-8` | 3830848 | 525060 | 25 |
+| `BenchmarkMatMulBackward_128x128x128-8` | 1982238 | 461009 | 74 |
+| `BenchmarkMatMulBackward_256x256x256-8` | 12856377 | 1842733 | 74 |
 
 ## Contributing
 
