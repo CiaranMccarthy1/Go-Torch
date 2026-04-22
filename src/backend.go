@@ -1,6 +1,7 @@
 package gotorch
 
 import (
+	"math"
 	"runtime"
 	"sync"
 )
@@ -17,9 +18,19 @@ type TensorStorage interface {
 type Backend interface {
 	Name() string
 	NewStorage(data []float32, size int) TensorStorage
-	Transpose(data []float32, rows, cols int) []float32
-	MatMulForward(a, b []float32, m, k, n int) []float32
-	MatMulBackward(a, b, gradOut []float32, m, k, n int, needGradA, needGradB bool) ([]float32, []float32)
+	ZeroStorage(size int) TensorStorage
+	CopyToHost(s TensorStorage) []float32
+	CopyToDevice(data []float32) TensorStorage
+	Transpose(a TensorStorage, rows, cols int) TensorStorage
+	MatMulForward(a, b TensorStorage, m, k, n int) TensorStorage
+	MatMulBackward(a, b, gradOut TensorStorage, m, k, n int, needGradA, needGradB bool) (TensorStorage, TensorStorage)
+	ReLUForward(a TensorStorage) TensorStorage
+	ReLUBackward(input, gradOut TensorStorage) TensorStorage
+	EmbedForward(weights, indices TensorStorage, batch, dim int) TensorStorage
+	EmbedBackward(weights, indices, gradOut TensorStorage, batch, dim int) TensorStorage
+	AddInPlace(dst TensorStorage, src TensorStorage)
+	ZeroBuffer(s TensorStorage)
+	AdamStep(param, grad, m, v TensorStorage, lr, beta1, beta2, eps float32, step int)
 }
 
 type sliceStorage struct {
@@ -43,23 +54,43 @@ func (b *CPUBackend) NewStorage(data []float32, size int) TensorStorage {
 	return &sliceStorage{data: data}
 }
 
-func (b *CPUBackend) Transpose(data []float32, rows, cols int) []float32 {
+func (b *CPUBackend) ZeroStorage(size int) TensorStorage {
+	return &sliceStorage{data: make([]float32, size)}
+}
+
+func (b *CPUBackend) CopyToHost(s TensorStorage) []float32 {
+	if s == nil {
+		return nil
+	}
+	return s.Data()
+}
+
+func (b *CPUBackend) CopyToDevice(data []float32) TensorStorage {
+	if data == nil {
+		return &sliceStorage{data: nil}
+	}
+	return &sliceStorage{data: data}
+}
+
+func (b *CPUBackend) Transpose(a TensorStorage, rows, cols int) TensorStorage {
+	data := a.Data()
 	out := make([]float32, rows*cols)
 	for r := 0; r < rows; r++ {
 		for c := 0; c < cols; c++ {
 			out[c*rows+r] = data[r*cols+c]
 		}
 	}
-	return out
+	return &sliceStorage{data: out}
 }
 
-func (b *CPUBackend) MatMulForward(a, bData []float32, m, k, n int) []float32 {
-	bT := b.Transpose(bData, k, n)
+func (cpu *CPUBackend) MatMulForward(aStorage, bStorage TensorStorage, m, k, n int) TensorStorage {
+	aData := aStorage.Data()
+	bT := cpu.Transpose(bStorage, k, n).Data()
 	out := make([]float32, m*n)
 
 	parallelFor(m, func(start, end int) {
 		for i := start; i < end; i++ {
-			aRow := a[i*k : (i+1)*k]
+			aRow := aData[i*k : (i+1)*k]
 			outRow := out[i*n : (i+1)*n]
 
 			for jBase := 0; jBase < n; jBase += matMulBlockN {
@@ -88,20 +119,23 @@ func (b *CPUBackend) MatMulForward(a, bData []float32, m, k, n int) []float32 {
 		}
 	})
 
-	return out
+	return &sliceStorage{data: out}
 }
 
-func (b *CPUBackend) MatMulBackward(a, bData, gradOut []float32, m, k, n int, needGradA, needGradB bool) ([]float32, []float32) {
-	var gradA []float32
-	var gradB []float32
+func (cpu *CPUBackend) MatMulBackward(aStorage, bStorage, gradOut TensorStorage, m, k, n int, needGradA, needGradB bool) (TensorStorage, TensorStorage) {
+	bData := bStorage.Data()
+	gradOutData := gradOut.Data()
+
+	var gradA TensorStorage
+	var gradB TensorStorage
 
 	if needGradA {
-		gradA = make([]float32, m*k)
+		gradAData := make([]float32, m*k)
 
 		parallelFor(m, func(start, end int) {
 			for i := start; i < end; i++ {
-				gradARow := gradA[i*k : (i+1)*k]
-				gradOutRow := gradOut[i*n : (i+1)*n]
+				gradARow := gradAData[i*k : (i+1)*k]
+				gradOutRow := gradOutData[i*n : (i+1)*n]
 
 				for kBase := 0; kBase < k; kBase += matMulBlockK {
 					kEnd := minInt(kBase+matMulBlockK, k)
@@ -128,18 +162,20 @@ func (b *CPUBackend) MatMulBackward(a, bData, gradOut []float32, m, k, n int, ne
 				}
 			}
 		})
+
+		gradA = &sliceStorage{data: gradAData}
 	}
 
 	if needGradB {
-		gradB = make([]float32, k*n)
+		gradBData := make([]float32, k*n)
 
-		aT := b.Transpose(a, m, k)
-		gradOutT := b.Transpose(gradOut, m, n)
+		aT := cpu.Transpose(aStorage, m, k).Data()
+		gradOutT := cpu.Transpose(gradOut, m, n).Data()
 
 		parallelFor(k, func(start, end int) {
 			for x := start; x < end; x++ {
 				aCol := aT[x*m : (x+1)*m]
-				gradBRow := gradB[x*n : (x+1)*n]
+				gradBRow := gradBData[x*n : (x+1)*n]
 
 				for jBase := 0; jBase < n; jBase += matMulBlockN {
 					jEnd := minInt(jBase+matMulBlockN, n)
@@ -163,9 +199,135 @@ func (b *CPUBackend) MatMulBackward(a, bData, gradOut []float32, m, k, n int, ne
 				}
 			}
 		})
+
+		gradB = &sliceStorage{data: gradBData}
 	}
 
 	return gradA, gradB
+}
+
+func (b *CPUBackend) ReLUForward(a TensorStorage) TensorStorage {
+	aData := a.Data()
+	out := make([]float32, len(aData))
+	for i, v := range aData {
+		if v > 0 {
+			out[i] = v
+		}
+	}
+	return &sliceStorage{data: out}
+}
+
+func (b *CPUBackend) ReLUBackward(input, gradOut TensorStorage) TensorStorage {
+	inputData := input.Data()
+	gradOutData := gradOut.Data()
+	out := make([]float32, len(inputData))
+	for i, v := range inputData {
+		if v > 0 {
+			out[i] = gradOutData[i]
+		}
+	}
+	return &sliceStorage{data: out}
+}
+
+func (b *CPUBackend) EmbedForward(weights, indices TensorStorage, batch, dim int) TensorStorage {
+	weightsData := weights.Data()
+	indicesData := indices.Data()
+
+	if len(indicesData) < batch {
+		panic("indices storage shorter than batch size")
+	}
+
+	vocabSize := len(weightsData) / dim
+	out := make([]float32, batch*dim)
+	for i := 0; i < batch; i++ {
+		idx := int(indicesData[i])
+		if idx < 0 || idx >= vocabSize {
+			panic("embedding index out of range")
+		}
+		copy(out[i*dim:(i+1)*dim], weightsData[idx*dim:(idx+1)*dim])
+	}
+
+	return &sliceStorage{data: out}
+}
+
+func (b *CPUBackend) EmbedBackward(weights, indices, gradOut TensorStorage, batch, dim int) TensorStorage {
+	weightsData := weights.Data()
+	indicesData := indices.Data()
+	gradOutData := gradOut.Data()
+
+	if len(indicesData) < batch {
+		panic("indices storage shorter than batch size")
+	}
+
+	vocabSize := len(weightsData) / dim
+	gradWeights := make([]float32, len(weightsData))
+	for i := 0; i < batch; i++ {
+		idx := int(indicesData[i])
+		if idx < 0 || idx >= vocabSize {
+			panic("embedding index out of range")
+		}
+		for k := 0; k < dim; k++ {
+			gradWeights[idx*dim+k] += gradOutData[i*dim+k]
+		}
+	}
+
+	return &sliceStorage{data: gradWeights}
+}
+
+func (b *CPUBackend) AddInPlace(dst TensorStorage, src TensorStorage) {
+	if dst == nil || src == nil {
+		return
+	}
+
+	dstData := dst.Data()
+	srcData := src.Data()
+	if len(dstData) != len(srcData) {
+		panic("storage size mismatch in AddInPlace")
+	}
+
+	for i, v := range srcData {
+		dstData[i] += v
+	}
+}
+
+func (b *CPUBackend) ZeroBuffer(s TensorStorage) {
+	if s == nil {
+		return
+	}
+	for i := range s.Data() {
+		s.Data()[i] = 0
+	}
+}
+
+func (b *CPUBackend) AdamStep(param, grad, m, v TensorStorage, lr, beta1, beta2, eps float32, step int) {
+	if param == nil || grad == nil || m == nil || v == nil {
+		return
+	}
+
+	paramData := param.Data()
+	gradData := grad.Data()
+	mData := m.Data()
+	vData := v.Data()
+
+	if len(paramData) != len(gradData) || len(paramData) != len(mData) || len(paramData) != len(vData) {
+		panic("storage size mismatch in AdamStep")
+	}
+
+	beta1Pow := float32(math.Pow(float64(beta1), float64(step)))
+	beta2Pow := float32(math.Pow(float64(beta2), float64(step)))
+	oneMinusBeta1Pow := float32(1.0) - beta1Pow
+	oneMinusBeta2Pow := float32(1.0) - beta2Pow
+
+	for i := range paramData {
+		g := gradData[i]
+		mData[i] = beta1*mData[i] + (1-beta1)*g
+		vData[i] = beta2*vData[i] + (1-beta2)*g*g
+
+		mHat := mData[i] / oneMinusBeta1Pow
+		vHat := vData[i] / oneMinusBeta2Pow
+
+		paramData[i] -= lr * mHat / (float32(math.Sqrt(float64(vHat))) + eps)
+	}
 }
 
 func minInt(a, b int) int {

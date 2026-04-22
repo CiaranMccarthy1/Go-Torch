@@ -5,8 +5,8 @@ type Operation interface {
 }
 
 func (t *Tensor) Backward() {
-	if t.Grad == nil {
-		t.Grad = []float32{1.0}
+	if t.gradStorage == nil {
+		t.SetGrad([]float32{1.0})
 	}
 	order := []*Tensor{}
 	visited := make(map[*Tensor]bool)

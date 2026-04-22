@@ -10,8 +10,8 @@ func benchmarkMatMulForward(b *testing.B, m, k, n int) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		out := MatMul(a, weights)
-		if len(out.Data) != m*n {
-			b.Fatalf("unexpected output size: got=%d want=%d", len(out.Data), m*n)
+		if len(out.Data()) != m*n {
+			b.Fatalf("unexpected output size: got=%d want=%d", len(out.Data()), m*n)
 		}
 	}
 }
@@ -28,7 +28,7 @@ func benchmarkMatMulBackward(b *testing.B, m, k, n int) {
 		weights.ZeroGrad()
 
 		out := MatMul(a, weights)
-		out.Grad = append(out.Grad[:0], upstream...)
+		out.SetGrad(append([]float32(nil), upstream...))
 		out.Backward()
 	}
 }

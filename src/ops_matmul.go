@@ -10,25 +10,24 @@ func (op MatMulOp) Backward(t *Tensor) {
 	a, b := t.Parents[0], t.Parents[1]
 	M, K, N := a.Shape[0], a.Shape[1], b.Shape[1]
 	backend := resolveBackend(t, a, b)
+	if t.gradStorage == nil {
+		return
+	}
 
-	gradA, gradB := backend.MatMulBackward(a.values(), b.values(), t.Grad, M, K, N, a.ReqGrad, b.ReqGrad)
+	gradA, gradB := backend.MatMulBackward(a.ensureStorage(), b.ensureStorage(), t.gradStorage, M, K, N, a.ReqGrad, b.ReqGrad)
 
 	if a.ReqGrad {
-		if a.Grad == nil {
-			a.Grad = make([]float32, M*K)
+		if a.gradStorage == nil {
+			a.gradStorage = backend.ZeroStorage(M * K)
 		}
-		for i, v := range gradA {
-			a.Grad[i] += v
-		}
+		backend.AddInPlace(a.gradStorage, gradA)
 	}
 
 	if b.ReqGrad {
-		if b.Grad == nil {
-			b.Grad = make([]float32, K*N)
+		if b.gradStorage == nil {
+			b.gradStorage = backend.ZeroStorage(K * N)
 		}
-		for i, v := range gradB {
-			b.Grad[i] += v
-		}
+		backend.AddInPlace(b.gradStorage, gradB)
 	}
 }
 
@@ -39,9 +38,9 @@ func MatMul(a, b *Tensor) *Tensor {
 
 	M, K, N := a.Shape[0], a.Shape[1], b.Shape[1]
 	backend := resolveBackend(a, b)
-	out := backend.MatMulForward(a.values(), b.values(), M, K, N)
+	out := backend.MatMulForward(a.ensureStorage(), b.ensureStorage(), M, K, N)
 
-	res := NewTensorWithBackend(out, []int{M, N}, a.ReqGrad || b.ReqGrad, backend)
+	res := newTensorFromStorage(out, []int{M, N}, a.ReqGrad || b.ReqGrad, backend)
 	res.Op = MatMulOp{}
 	res.Parents = []*Tensor{a, b}
 	return res

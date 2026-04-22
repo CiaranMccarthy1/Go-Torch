@@ -74,7 +74,7 @@ func TestMatMulForwardMatchesNaive(t *testing.T) {
 	}
 
 	expected := naiveMatMul(aData, bData, m, k, n)
-	requireCloseSlice(t, "matmul forward", out.Data, expected, 1e-4)
+	requireCloseSlice(t, "matmul forward", out.Data(), expected, 1e-4)
 }
 
 func TestMatMulBackwardFiniteDifference(t *testing.T) {
@@ -87,7 +87,7 @@ func TestMatMulBackwardFiniteDifference(t *testing.T) {
 	a := NewTensor(append([]float32(nil), aData...), []int{m, k}, true)
 	b := NewTensor(append([]float32(nil), bData...), []int{k, n}, true)
 	out := MatMul(a, b)
-	out.Grad = append([]float32(nil), upstream...)
+	out.SetGrad(append([]float32(nil), upstream...))
 	out.Backward()
 
 	numGradA := make([]float32, len(aData))
@@ -115,6 +115,6 @@ func TestMatMulBackwardFiniteDifference(t *testing.T) {
 		bProbe[idx] = orig
 	}
 
-	requireCloseSlice(t, "matmul grad A", a.Grad, numGradA, 2e-2)
-	requireCloseSlice(t, "matmul grad B", b.Grad, numGradB, 2e-2)
+	requireCloseSlice(t, "matmul grad A", a.Grad(), numGradA, 2e-2)
+	requireCloseSlice(t, "matmul grad B", b.Grad(), numGradB, 2e-2)
 }

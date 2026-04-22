@@ -45,31 +45,65 @@ type HSLossOp struct {
 
 func (op HSLossOp) Backward(t *Tensor) {
 	hidden := t.Parents[0]
+	backend := resolveBackend(t, hidden)
+	hiddenData := hidden.Data()
+	if len(hiddenData) == 0 {
+		return
+	}
+
+	scale := float32(1.0)
+	gradOut := t.Grad()
+	if len(gradOut) == 1 {
+		scale = gradOut[0]
+	}
+
+	if hidden.ReqGrad && hidden.gradStorage == nil {
+		hidden.gradStorage = backend.ZeroStorage(len(hiddenData))
+	}
+
 	path := op.HS.Paths[op.Target]
 	for i, node := range path.Nodes {
+		nodeData := node.Weight.Data()
 		var score float32
-		for k := range hidden.Data {
-			score += node.Weight.Data[k] * hidden.Data[k]
+		for k := range hiddenData {
+			score += nodeData[k] * hiddenData[k]
 		}
 
 		prob := 1.0 / (1.0 + math.Exp(float64(-score)))
 
-		grad := float32(prob) - path.Directions[i]
+		grad := (float32(prob) - path.Directions[i]) * scale
 
-		for k := range node.Weight.Data {
-			AtomicAddFloat32(&node.Weight.Grad[k], grad*hidden.Data[k])
-			AtomicAddFloat32(&hidden.Grad[k], grad*node.Weight.Data[k])
+		if node.Weight.ReqGrad {
+			if node.Weight.gradStorage == nil {
+				node.Weight.gradStorage = backend.ZeroStorage(len(nodeData))
+			}
+			nodeGrad := make([]float32, len(nodeData))
+			for k := range nodeData {
+				nodeGrad[k] = grad * hiddenData[k]
+			}
+			backend.AddInPlace(node.Weight.gradStorage, backend.CopyToDevice(nodeGrad))
+		}
+
+		if hidden.ReqGrad {
+			hiddenGrad := make([]float32, len(hiddenData))
+			for k := range hiddenData {
+				hiddenGrad[k] = grad * nodeData[k]
+			}
+			backend.AddInPlace(hidden.gradStorage, backend.CopyToDevice(hiddenGrad))
 		}
 	}
 }
 
 func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
+	backend := resolveBackend(hidden)
+	hiddenData := hidden.Data()
 	path := hs.Paths[targetID]
 	loss := 0.0
 	for i, node := range path.Nodes {
+		nodeData := node.Weight.Data()
 		var score float32
-		for k := range hidden.Data {
-			score += node.Weight.Data[k] * hidden.Data[k]
+		for k := range hiddenData {
+			score += nodeData[k] * hiddenData[k]
 		}
 
 		prob := 1.0 / (1.0 + math.Exp(float64(-score)))
@@ -80,7 +114,7 @@ func HSLoss(hs *HierarchicalSoftmax, hidden *Tensor, targetID int) *Tensor {
 			loss -= math.Log(1.0 - prob + 1e-9)
 		}
 	}
-	res := NewTensor([]float32{float32(loss)}, []int{1}, true)
+	res := NewTensorWithBackend([]float32{float32(loss)}, []int{1}, true, backend)
 	res.Op = HSLossOp{HS: hs, Target: targetID}
 	res.Parents = []*Tensor{hidden}
 	return res

@@ -1,14 +1,13 @@
 package gotorch
 
 type Tensor struct {
-	Data    []float32
-	Shape   []int
-	Grad    []float32
-	Parents []*Tensor
-	Op      Operation
-	ReqGrad bool
-	Backend Backend
-	storage TensorStorage
+	storage     TensorStorage
+	gradStorage TensorStorage
+	Shape       []int
+	Parents     []*Tensor
+	Op          Operation
+	ReqGrad     bool
+	Backend     Backend
 }
 
 func NewTensor(data []float32, shape []int, reqGrad bool) *Tensor {
@@ -20,45 +19,70 @@ func NewTensorWithBackend(data []float32, shape []int, reqGrad bool, backend Bac
 		backend = DefaultBackend()
 	}
 
+	size := shapeSize(shape)
+	storage := backend.NewStorage(data, size)
+	return &Tensor{storage: storage, Shape: append([]int(nil), shape...), ReqGrad: reqGrad, Backend: backend}
+}
+
+func newTensorFromStorage(storage TensorStorage, shape []int, reqGrad bool, backend Backend) *Tensor {
+	if backend == nil {
+		backend = DefaultBackend()
+	}
+	return &Tensor{storage: storage, Shape: append([]int(nil), shape...), ReqGrad: reqGrad, Backend: backend}
+}
+
+func (t *Tensor) ensureBackend() Backend {
+	if t.Backend == nil {
+		t.Backend = DefaultBackend()
+	}
+	return t.Backend
+}
+
+func (t *Tensor) ensureStorage() TensorStorage {
+	if t.storage == nil {
+		t.storage = t.ensureBackend().ZeroStorage(shapeSize(t.Shape))
+	}
+	return t.storage
+}
+
+func (t *Tensor) Data() []float32 {
+	if t == nil {
+		return nil
+	}
+	if t.storage == nil {
+		return nil
+	}
+	return t.ensureBackend().CopyToHost(t.storage)
+}
+
+func (t *Tensor) Grad() []float32 {
+	if t == nil || t.gradStorage == nil {
+		return nil
+	}
+	return t.ensureBackend().CopyToHost(t.gradStorage)
+}
+
+func (t *Tensor) SetGrad(data []float32) {
+	t.gradStorage = t.ensureBackend().CopyToDevice(data)
+}
+
+func (t *Tensor) ensureGradStorage(size int) TensorStorage {
+	if t.gradStorage == nil {
+		t.gradStorage = t.ensureBackend().ZeroStorage(size)
+	}
+	return t.gradStorage
+}
+
+func (t *Tensor) ZeroGrad() {
+	if t.gradStorage != nil {
+		t.ensureBackend().ZeroBuffer(t.gradStorage)
+	}
+}
+
+func shapeSize(shape []int) int {
 	size := 1
 	for _, dim := range shape {
 		size *= dim
 	}
-
-	storage := backend.NewStorage(data, size)
-	tensorData := storage.Data()
-
-	t := &Tensor{Data: tensorData, Shape: shape, ReqGrad: reqGrad, Backend: backend, storage: storage}
-	if reqGrad {
-		t.Grad = make([]float32, size)
-	}
-	return t
-}
-
-func (t *Tensor) values() []float32 {
-	if t.Backend == nil {
-		t.Backend = DefaultBackend()
-	}
-
-	if t.storage == nil {
-		t.storage = t.Backend.NewStorage(t.Data, len(t.Data))
-	} else {
-		stored := t.storage.Data()
-		if len(stored) != len(t.Data) {
-			t.storage = t.Backend.NewStorage(t.Data, len(t.Data))
-		} else if len(t.Data) > 0 && len(stored) > 0 && &stored[0] != &t.Data[0] {
-			t.storage = t.Backend.NewStorage(t.Data, len(t.Data))
-		}
-	}
-
-	t.Data = t.storage.Data()
-	return t.Data
-}
-
-func (t *Tensor) ZeroGrad() {
-	if t.Grad != nil {
-		for i := range t.Grad {
-			t.Grad[i] = 0
-		}
-	}
+	return size
 }
