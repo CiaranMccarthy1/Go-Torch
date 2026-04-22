@@ -20,11 +20,7 @@ func AtomicAddFloat32(addr *float32, delta float32) {
 
 func Transpose(t *Tensor) *Tensor {
 	rows, cols := t.Shape[0], t.Shape[1]
-	out := make([]float32, rows*cols)
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
-			out[c*rows+r] = t.Data[r*cols+c]
-		}
-	}
-	return NewTensor(out, []int{cols, rows}, t.ReqGrad)
+	backend := resolveBackend(t)
+	out := backend.Transpose(t.values(), rows, cols)
+	return NewTensorWithBackend(out, []int{cols, rows}, t.ReqGrad, backend)
 }
