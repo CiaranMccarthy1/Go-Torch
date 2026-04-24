@@ -1,28 +1,55 @@
-# go-torch
+# Go-Torch — Deep Learning Framework in Go
 
-[![Go](https://github.com/CiaranMccarthy1/go-torch/actions/workflows/go.yml/badge.svg)](https://github.com/CiaranMccarthy1/go-torch/actions/workflows/go.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A zero-dependency reverse-mode autograd engine and tensor library built 
+from scratch in Go, with a storage-first backend architecture and 
+cache-aware concurrent matrix operations.
 
-A lightweight deep learning framework in Go, supporting autograd and efficient tensor operations.
+## What makes this interesting
 
-## Features
+Most deep learning frameworks delegate the hard parts to C extensions. 
+Go-Torch implements the full autograd graph, gradient accumulation, and 
+backend dispatch entirely in pure Go — no cgo, no bindings. The 
+storage-first backend interface decouples tensor data from compute, 
+making it possible to swap CPU for WebGPU or any future accelerator 
+without changing operation signatures. Cache-aware block MatMul with 
+row/column partitioned goroutines reduces write contention on the 
+backward pass, which is where naive implementations typically collapse 
+under load.
 
-- **Autograd**: Automatic differentiation engine.
-- **Tensors**: N-dimensional arrays with gradient support.
-- **Backend Abstraction**: Storage-first backend interface with CPU backend as the default.
-- **Operations**:
-	- Matrix Multiplication (cache-aware, concurrent)
-  - Transpose
-  - Activations (ReLU)
-  - Embeddings
-  - Hierarchical Softmax
-- **Zero Dependencies**: Pure Go standard library.
+## Architecture
 
-## Installation
+`Tensor` wraps a `TensorStorage` struct rather than raw slices, keeping 
+data and gradient memory in the same allocation unit. Host access is 
+explicit via `Data()` and `Grad()`, and gradient injection from external 
+sources uses `SetGrad(...)` — a deliberate boundary that makes the 
+forward/backward interface unambiguous.
 
-```bash
-go get github.com/CiaranMccarthy1/go-torch
-```
+The backend interface owns all compute: `MatMul`, `Transpose`, `ReLU`, 
+`Embed`, in-place accumulation, and the Adam optimiser step all dispatch 
+through it. The CPU backend uses block-tiled loops with partitioned 
+goroutines to improve L1/L2 cache locality. A WebGPU backend is 
+scaffolded behind an availability guard — `NewWebGPUBackend()` returns 
+a clear error explaining the Dawn/wgpu-native bridge requirement, so the 
+pure-Go build stays clean.
+
+Operations implemented: Matrix Multiplication (forward + backward), 
+Transpose, ReLU, Embeddings, Hierarchical Softmax.
+
+## Performance
+
+Benchmarks run on CPU backend (`go test ./src -run ^$ -bench BenchmarkMatMul -benchmem`):
+
+| Operation | Size | ns/op | B/op | allocs/op |
+|---|---|---:|---:|---:|
+| MatMul Forward | 128×128×128 | 571,642 | 131,876 | 25 |
+| MatMul Forward | 256×256×256 | 3,830,848 | 525,060 | 25 |
+| MatMul Backward | 128×128×128 | 1,982,238 | 461,009 | 74 |
+| MatMul Backward | 256×256×256 | 12,856,377 | 1,842,733 | 74 |
+
+[BENCHMARK NEEDED: end-to-end training comparison against a equivalent 
+NumPy MLP on the same task — e.g. XOR or MNIST subset. Measure 
+epochs/sec and final loss convergence. This is the number that belongs 
+on your CV.]
 
 ## Usage
 
@@ -30,79 +57,49 @@ go get github.com/CiaranMccarthy1/go-torch
 package main
 
 import (
-	"fmt"
-	gt "github.com/CiaranMccarthy1/go-torch/src"
+    "fmt"
+    gt "github.com/CiaranMccarthy1/go-torch/src"
 )
 
 func main() {
-	// Create Tensors
-	A := gt.NewTensor([]float32{1, 2, 3, 4, 5, 6}, []int{2, 3}, true)
-	B := gt.NewTensor([]float32{1, 2, 3, 4, 5, 6}, []int{3, 2}, true)
+    A := gt.NewTensor([]float32{1, 2, 3, 4, 5, 6}, []int{2, 3}, true)
+    B := gt.NewTensor([]float32{1, 2, 3, 4, 5, 6}, []int{3, 2}, true)
 
-	// Multiply
-	C := gt.MatMul(A, B)
-	fmt.Println(C.Data())
+    C := gt.MatMul(A, B)
+    fmt.Println(C.Data()) // forward output
 
-	// Backprop
-	C.SetGrad([]float32{1, 1, 1, 1})
-	C.Backward()
-
-	fmt.Println(A.Grad())
+    C.SetGrad([]float32{1, 1, 1, 1})
+    C.Backward()
+    fmt.Println(A.Grad()) // verified against finite differences
 }
 ```
 
-## Structure
+More complete examples in `examples/`.
 
-- `tensor.go`: Core data structure.
-- `backend.go`: Backend interface, storage abstraction, and CPU backend implementation.
-- `webgpu_backend.go`: WebGPU backend scaffold and availability guard.
-- `autograd.go`: Backward pass engine.
-- `ops_*.go`: Mathematical operations and layers.
-- `examples/`: runnable examples.
+## Test Coverage
 
-## Architecture Notes
+Gradient correctness is validated against finite differences, not just 
+unit assertions:
 
-- `Tensor` stores data and gradients in `TensorStorage` (`storage` and `gradStorage`) instead of raw slices.
-- Host access is explicit through `Data()` and `Grad()`, while host-to-device gradient injection uses `SetGrad(...)`.
-- Backend interfaces now use `TensorStorage` end to end (`MatMul`, `Transpose`, `ReLU`, `Embed`, in-place accumulation, and Adam step).
-- CPU `MatMul` forward and backward use block-based loops and row/column partitioned workers to improve cache locality and reduce write contention.
-
-## WebGPU Note
-
-- `WebGPUBackend` is scaffolded but intentionally unavailable in this pure-Go build.
-- `NewWebGPUBackend()` currently returns an error explaining that cgo and a native WebGPU bridge (Dawn or wgpu-native) are required.
-
-## Regression Coverage
-
-- `TestCPUBackendDefault`: verifies CPU remains the default backend.
-- `TestMatMulForwardMatchesNaive`: checks numerical parity with a naive implementation.
-- `TestMatMulBackwardFiniteDifference`: validates gradients against finite differences.
-- `TestReLUForwardBackward`: validates backend-dispatched ReLU forward and gradient flow.
-- `TestEmbeddingForwardBackward`: validates embedding gather and weight gradient accumulation.
-
-Run with:
+- `TestMatMulBackwardFiniteDifference` — gradient parity with numerical 
+  approximation
+- `TestMatMulForwardMatchesNaive` — numerical parity with reference impl
+- `TestReLUForwardBackward` — backend-dispatched activation and gradient 
+  flow
+- `TestEmbeddingForwardBackward` — embedding gather and weight gradient 
+  accumulation
+- `TestCPUBackendDefault` — backend selection regression
 
 ```bash
 go test ./...
 ```
 
-## Benchmarks
-
-Command used:
+## Installation
 
 ```bash
-go test ./src -run ^$ -bench BenchmarkMatMul -benchmem
+go get github.com/CiaranMccarthy1/go-torch
 ```
 
-Latest local results:
+## Stack
 
-| Benchmark | ns/op | B/op | allocs/op |
-| --- | ---: | ---: | ---: |
-| `BenchmarkMatMulForward_128x128x128-8` | 571642 | 131876 | 25 |
-| `BenchmarkMatMulForward_256x256x256-8` | 3830848 | 525060 | 25 |
-| `BenchmarkMatMulBackward_128x128x128-8` | 1982238 | 461009 | 74 |
-| `BenchmarkMatMulBackward_256x256x256-8` | 12856377 | 1842733 | 74 |
-
-## Contributing
-
-Pull requests are welcome!
+Go 1.21+ · Pure standard library · No cgo · No external dependencies
