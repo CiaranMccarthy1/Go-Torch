@@ -46,11 +46,6 @@ Benchmarks run on CPU backend (`go test ./src -run ^$ -bench BenchmarkMatMul -be
 | MatMul Backward | 128×128×128 | 1,982,238 | 461,009 | 74 |
 | MatMul Backward | 256×256×256 | 12,856,377 | 1,842,733 | 74 |
 
-[BENCHMARK NEEDED: end-to-end training comparison against a equivalent 
-NumPy MLP on the same task — e.g. XOR or MNIST subset. Measure 
-epochs/sec and final loss convergence. This is the number that belongs 
-on your CV.]
-
 ## Usage
 
 ```go
