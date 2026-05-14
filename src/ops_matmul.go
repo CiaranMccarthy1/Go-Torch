@@ -17,17 +17,13 @@ func (op MatMulOp) Backward(t *Tensor) {
 	gradA, gradB := backend.MatMulBackward(a.ensureStorage(), b.ensureStorage(), t.gradStorage, M, K, N, a.ReqGrad, b.ReqGrad)
 
 	if a.ReqGrad {
-		if a.gradStorage == nil {
-			a.gradStorage = backend.ZeroStorage(M * K)
-		}
-		backend.AddInPlace(a.gradStorage, gradA)
+		gradAStorage := a.ensureGradStorage(M * K)
+		backend.AddInPlace(gradAStorage, gradA)
 	}
 
 	if b.ReqGrad {
-		if b.gradStorage == nil {
-			b.gradStorage = backend.ZeroStorage(K * N)
-		}
-		backend.AddInPlace(b.gradStorage, gradB)
+		gradBStorage := b.ensureGradStorage(K * N)
+		backend.AddInPlace(gradBStorage, gradB)
 	}
 }
 

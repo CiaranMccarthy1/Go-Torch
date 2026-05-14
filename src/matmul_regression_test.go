@@ -50,7 +50,7 @@ func requireCloseSlice(t *testing.T, name string, got, want []float32, tol float
 	}
 }
 
-func TestCPUBackendDefault(t *testing.T) {
+func TestDefaultBackend(t *testing.T) {
 	tensor := NewTensor([]float32{1}, []int{1}, false)
 	if tensor.Backend == nil {
 		t.Fatal("expected default backend to be set")

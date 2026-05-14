@@ -57,8 +57,9 @@ func (op HSLossOp) Backward(t *Tensor) {
 		scale = gradOut[0]
 	}
 
-	if hidden.ReqGrad && hidden.gradStorage == nil {
-		hidden.gradStorage = backend.ZeroStorage(len(hiddenData))
+	var hiddenGradStorage TensorStorage
+	if hidden.ReqGrad {
+		hiddenGradStorage = hidden.ensureGradStorage(shapeSize(hidden.Shape))
 	}
 
 	path := op.HS.Paths[op.Target]
@@ -74,14 +75,12 @@ func (op HSLossOp) Backward(t *Tensor) {
 		grad := (float32(prob) - path.Directions[i]) * scale
 
 		if node.Weight.ReqGrad {
-			if node.Weight.gradStorage == nil {
-				node.Weight.gradStorage = backend.ZeroStorage(len(nodeData))
-			}
+			nodeGradStorage := node.Weight.ensureGradStorage(shapeSize(node.Weight.Shape))
 			nodeGrad := make([]float32, len(nodeData))
 			for k := range nodeData {
 				nodeGrad[k] = grad * hiddenData[k]
 			}
-			backend.AddInPlace(node.Weight.gradStorage, backend.CopyToDevice(nodeGrad))
+			backend.AddInPlace(nodeGradStorage, backend.CopyToDevice(nodeGrad))
 		}
 
 		if hidden.ReqGrad {
@@ -89,7 +88,7 @@ func (op HSLossOp) Backward(t *Tensor) {
 			for k := range hiddenData {
 				hiddenGrad[k] = grad * nodeData[k]
 			}
-			backend.AddInPlace(hidden.gradStorage, backend.CopyToDevice(hiddenGrad))
+			backend.AddInPlace(hiddenGradStorage, backend.CopyToDevice(hiddenGrad))
 		}
 	}
 }

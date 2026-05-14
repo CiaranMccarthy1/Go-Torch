@@ -10,13 +10,11 @@ func (op EmbeddingOp) Backward(t *Tensor) {
 	}
 
 	backend := resolveBackend(weights, indices, t)
-	if weights.gradStorage == nil {
-		weights.gradStorage = backend.ZeroStorage(shapeSize(weights.Shape))
-	}
+	weightsGrad := weights.ensureGradStorage(shapeSize(weights.Shape))
 
 	batch := indices.Shape[0]
 	gradWeights := backend.EmbedBackward(weights.ensureStorage(), indices.ensureStorage(), t.gradStorage, batch, dim)
-	backend.AddInPlace(weights.gradStorage, gradWeights)
+	backend.AddInPlace(weightsGrad, gradWeights)
 }
 
 func Embed(weights, indices *Tensor) *Tensor {

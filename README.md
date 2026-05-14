@@ -83,7 +83,7 @@ unit assertions:
   flow
 - `TestEmbeddingForwardBackward` — embedding gather and weight gradient 
   accumulation
-- `TestCPUBackendDefault` — backend selection regression
+- `TestDefaultBackend` — backend selection regression
 
 ```bash
 go test ./...

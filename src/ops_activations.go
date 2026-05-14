@@ -9,12 +9,9 @@ func (op ReLUOp) Backward(t *Tensor) {
 	}
 
 	backend := resolveBackend(input, t)
-	if input.gradStorage == nil {
-		input.gradStorage = backend.ZeroStorage(shapeSize(input.Shape))
-	}
-
+	inputGrad := input.ensureGradStorage(shapeSize(input.Shape))
 	grad := backend.ReLUBackward(input.ensureStorage(), t.gradStorage)
-	backend.AddInPlace(input.gradStorage, grad)
+	backend.AddInPlace(inputGrad, grad)
 }
 
 func ReLU(t *Tensor) *Tensor {

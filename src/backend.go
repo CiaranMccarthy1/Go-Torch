@@ -41,38 +41,38 @@ func (s *sliceStorage) Data() []float32 {
 	return s.data
 }
 
-type CPUBackend struct{}
+type NativeBackend struct{}
 
-func (b *CPUBackend) Name() string {
+func (b *NativeBackend) Name() string {
 	return "cpu"
 }
 
-func (b *CPUBackend) NewStorage(data []float32, size int) TensorStorage {
+func (b *NativeBackend) NewStorage(data []float32, size int) TensorStorage {
 	if data == nil {
 		data = make([]float32, size)
 	}
 	return &sliceStorage{data: data}
 }
 
-func (b *CPUBackend) ZeroStorage(size int) TensorStorage {
+func (b *NativeBackend) ZeroStorage(size int) TensorStorage {
 	return &sliceStorage{data: make([]float32, size)}
 }
 
-func (b *CPUBackend) CopyToHost(s TensorStorage) []float32 {
+func (b *NativeBackend) CopyToHost(s TensorStorage) []float32 {
 	if s == nil {
 		return nil
 	}
 	return s.Data()
 }
 
-func (b *CPUBackend) CopyToDevice(data []float32) TensorStorage {
+func (b *NativeBackend) CopyToDevice(data []float32) TensorStorage {
 	if data == nil {
 		return &sliceStorage{data: nil}
 	}
 	return &sliceStorage{data: data}
 }
 
-func (b *CPUBackend) Transpose(a TensorStorage, rows, cols int) TensorStorage {
+func (b *NativeBackend) Transpose(a TensorStorage, rows, cols int) TensorStorage {
 	data := a.Data()
 	out := make([]float32, rows*cols)
 	for r := 0; r < rows; r++ {
@@ -83,7 +83,7 @@ func (b *CPUBackend) Transpose(a TensorStorage, rows, cols int) TensorStorage {
 	return &sliceStorage{data: out}
 }
 
-func (cpu *CPUBackend) MatMulForward(aStorage, bStorage TensorStorage, m, k, n int) TensorStorage {
+func (cpu *NativeBackend) MatMulForward(aStorage, bStorage TensorStorage, m, k, n int) TensorStorage {
 	aData := aStorage.Data()
 	bT := cpu.Transpose(bStorage, k, n).Data()
 	out := make([]float32, m*n)
@@ -122,7 +122,7 @@ func (cpu *CPUBackend) MatMulForward(aStorage, bStorage TensorStorage, m, k, n i
 	return &sliceStorage{data: out}
 }
 
-func (cpu *CPUBackend) MatMulBackward(aStorage, bStorage, gradOut TensorStorage, m, k, n int, needGradA, needGradB bool) (TensorStorage, TensorStorage) {
+func (cpu *NativeBackend) MatMulBackward(aStorage, bStorage, gradOut TensorStorage, m, k, n int, needGradA, needGradB bool) (TensorStorage, TensorStorage) {
 	bData := bStorage.Data()
 	gradOutData := gradOut.Data()
 
@@ -206,7 +206,7 @@ func (cpu *CPUBackend) MatMulBackward(aStorage, bStorage, gradOut TensorStorage,
 	return gradA, gradB
 }
 
-func (b *CPUBackend) ReLUForward(a TensorStorage) TensorStorage {
+func (b *NativeBackend) ReLUForward(a TensorStorage) TensorStorage {
 	aData := a.Data()
 	out := make([]float32, len(aData))
 	for i, v := range aData {
@@ -217,7 +217,7 @@ func (b *CPUBackend) ReLUForward(a TensorStorage) TensorStorage {
 	return &sliceStorage{data: out}
 }
 
-func (b *CPUBackend) ReLUBackward(input, gradOut TensorStorage) TensorStorage {
+func (b *NativeBackend) ReLUBackward(input, gradOut TensorStorage) TensorStorage {
 	inputData := input.Data()
 	gradOutData := gradOut.Data()
 	out := make([]float32, len(inputData))
@@ -229,7 +229,7 @@ func (b *CPUBackend) ReLUBackward(input, gradOut TensorStorage) TensorStorage {
 	return &sliceStorage{data: out}
 }
 
-func (b *CPUBackend) EmbedForward(weights, indices TensorStorage, batch, dim int) TensorStorage {
+func (b *NativeBackend) EmbedForward(weights, indices TensorStorage, batch, dim int) TensorStorage {
 	weightsData := weights.Data()
 	indicesData := indices.Data()
 
@@ -250,7 +250,7 @@ func (b *CPUBackend) EmbedForward(weights, indices TensorStorage, batch, dim int
 	return &sliceStorage{data: out}
 }
 
-func (b *CPUBackend) EmbedBackward(weights, indices, gradOut TensorStorage, batch, dim int) TensorStorage {
+func (b *NativeBackend) EmbedBackward(weights, indices, gradOut TensorStorage, batch, dim int) TensorStorage {
 	weightsData := weights.Data()
 	indicesData := indices.Data()
 	gradOutData := gradOut.Data()
@@ -274,7 +274,7 @@ func (b *CPUBackend) EmbedBackward(weights, indices, gradOut TensorStorage, batc
 	return &sliceStorage{data: gradWeights}
 }
 
-func (b *CPUBackend) AddInPlace(dst TensorStorage, src TensorStorage) {
+func (b *NativeBackend) AddInPlace(dst TensorStorage, src TensorStorage) {
 	if dst == nil || src == nil {
 		return
 	}
@@ -290,7 +290,7 @@ func (b *CPUBackend) AddInPlace(dst TensorStorage, src TensorStorage) {
 	}
 }
 
-func (b *CPUBackend) ZeroBuffer(s TensorStorage) {
+func (b *NativeBackend) ZeroBuffer(s TensorStorage) {
 	if s == nil {
 		return
 	}
@@ -299,7 +299,7 @@ func (b *CPUBackend) ZeroBuffer(s TensorStorage) {
 	}
 }
 
-func (b *CPUBackend) AdamStep(param, grad, m, v TensorStorage, lr, beta1, beta2, eps float32, step int) {
+func (b *NativeBackend) AdamStep(param, grad, m, v TensorStorage, lr, beta1, beta2, eps float32, step int) {
 	if param == nil || grad == nil || m == nil || v == nil {
 		return
 	}
@@ -320,14 +320,32 @@ func (b *CPUBackend) AdamStep(param, grad, m, v TensorStorage, lr, beta1, beta2,
 
 	for i := range paramData {
 		g := gradData[i]
+		if !isFinite32(g) || !isFinite32(paramData[i]) {
+			panic("non-finite value in AdamStep")
+		}
+
 		mData[i] = beta1*mData[i] + (1-beta1)*g
 		vData[i] = beta2*vData[i] + (1-beta2)*g*g
 
 		mHat := mData[i] / oneMinusBeta1Pow
 		vHat := vData[i] / oneMinusBeta2Pow
+		if !isFinite32(mHat) || !isFinite32(vHat) {
+			panic("non-finite moment in AdamStep")
+		}
 
-		paramData[i] -= lr * mHat / (float32(math.Sqrt(float64(vHat))) + eps)
+		update := lr * mHat / (float32(math.Sqrt(float64(vHat))) + eps)
+		if !isFinite32(update) {
+			panic("non-finite update in AdamStep")
+		}
+		paramData[i] -= update
+		if !isFinite32(paramData[i]) {
+			panic("non-finite parameter in AdamStep")
+		}
 	}
+}
+
+func isFinite32(v float32) bool {
+	return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0)
 }
 
 func minInt(a, b int) int {
@@ -375,7 +393,7 @@ func parallelFor(total int, fn func(start, end int)) {
 	wg.Wait()
 }
 
-var defaultBackend Backend = &CPUBackend{}
+var defaultBackend Backend = &NativeBackend{}
 
 func DefaultBackend() Backend {
 	return defaultBackend
