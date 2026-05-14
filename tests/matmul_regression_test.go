@@ -1,9 +1,11 @@
-package gotorch
+package gotorch_test
 
 import (
 	"math"
 	"math/rand"
 	"testing"
+
+	gotorch "github.com/CiaranMccarthy1/go-torch/src"
 )
 
 func randomData(size int, seed int64) []float32 {
@@ -51,7 +53,7 @@ func requireCloseSlice(t *testing.T, name string, got, want []float32, tol float
 }
 
 func TestDefaultBackend(t *testing.T) {
-	tensor := NewTensor([]float32{1}, []int{1}, false)
+	tensor := gotorch.NewTensor([]float32{1}, []int{1}, false)
 	if tensor.Backend == nil {
 		t.Fatal("expected default backend to be set")
 	}
@@ -65,9 +67,9 @@ func TestMatMulForwardMatchesNaive(t *testing.T) {
 	aData := randomData(m*k, 11)
 	bData := randomData(k*n, 29)
 
-	a := NewTensor(append([]float32(nil), aData...), []int{m, k}, false)
-	b := NewTensor(append([]float32(nil), bData...), []int{k, n}, false)
-	out := MatMul(a, b)
+	a := gotorch.NewTensor(append([]float32(nil), aData...), []int{m, k}, false)
+	b := gotorch.NewTensor(append([]float32(nil), bData...), []int{k, n}, false)
+	out := gotorch.MatMul(a, b)
 
 	if out.Shape[0] != m || out.Shape[1] != n {
 		t.Fatalf("unexpected output shape: got=%v want=[%d %d]", out.Shape, m, n)
@@ -84,9 +86,9 @@ func TestMatMulBackwardFiniteDifference(t *testing.T) {
 	bData := randomData(k*n, 202)
 	upstream := randomData(m*n, 303)
 
-	a := NewTensor(append([]float32(nil), aData...), []int{m, k}, true)
-	b := NewTensor(append([]float32(nil), bData...), []int{k, n}, true)
-	out := MatMul(a, b)
+	a := gotorch.NewTensor(append([]float32(nil), aData...), []int{m, k}, true)
+	b := gotorch.NewTensor(append([]float32(nil), bData...), []int{k, n}, true)
+	out := gotorch.MatMul(a, b)
 	out.SetGrad(append([]float32(nil), upstream...))
 	out.Backward()
 

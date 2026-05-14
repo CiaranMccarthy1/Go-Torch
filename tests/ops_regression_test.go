@@ -1,10 +1,14 @@
-package gotorch
+package gotorch_test
 
-import "testing"
+import (
+	"testing"
+
+	gotorch "github.com/CiaranMccarthy1/go-torch/src"
+)
 
 func TestReLUForwardBackward(t *testing.T) {
-	input := NewTensor([]float32{-2, -0.5, 0, 1, 3}, []int{5}, true)
-	out := ReLU(input)
+	input := gotorch.NewTensor([]float32{-2, -0.5, 0, 1, 3}, []int{5}, true)
+	out := gotorch.ReLU(input)
 
 	expectedForward := []float32{0, 0, 0, 1, 3}
 	requireCloseSlice(t, "relu forward", out.Data(), expectedForward, 1e-6)
@@ -17,14 +21,14 @@ func TestReLUForwardBackward(t *testing.T) {
 }
 
 func TestEmbeddingForwardBackward(t *testing.T) {
-	weights := NewTensor([]float32{
+	weights := gotorch.NewTensor([]float32{
 		1, 2,
 		3, 4,
 		5, 6,
 	}, []int{3, 2}, true)
-	indices := NewTensor([]float32{2, 0, 2}, []int{3}, false)
+	indices := gotorch.NewTensor([]float32{2, 0, 2}, []int{3}, false)
 
-	out := Embed(weights, indices)
+	out := gotorch.Embed(weights, indices)
 	expectedForward := []float32{
 		5, 6,
 		1, 2,

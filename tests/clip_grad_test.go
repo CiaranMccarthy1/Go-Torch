@@ -1,15 +1,17 @@
-package gotorch
+package gotorch_test
 
 import (
 	"math"
 	"testing"
+
+	gotorch "github.com/CiaranMccarthy1/go-torch/src"
 )
 
 func TestClipGradNormScales(t *testing.T) {
-	param := NewTensor(nil, []int{2, 2}, true)
+	param := gotorch.NewTensor(nil, []int{2, 2}, true)
 	param.SetGrad([]float32{3, 4, 0, 0})
 
-	norm := ClipGradNorm([]*Tensor{param}, 2)
+	norm := gotorch.ClipGradNorm([]*gotorch.Tensor{param}, 2)
 	if math.Abs(float64(norm-5)) > 1e-6 {
 		t.Fatalf("unexpected norm: got=%f want=5", norm)
 	}

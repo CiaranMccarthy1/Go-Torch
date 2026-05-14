@@ -1,15 +1,19 @@
-package gotorch
+package gotorch_test
 
-import "testing"
+import (
+	"testing"
+
+	gotorch "github.com/CiaranMccarthy1/go-torch/src"
+)
 
 func benchmarkMatMulForward(b *testing.B, m, k, n int) {
-	a := NewTensor(randomData(m*k, 7), []int{m, k}, false)
-	weights := NewTensor(randomData(k*n, 13), []int{k, n}, false)
+	a := gotorch.NewTensor(randomData(m*k, 7), []int{m, k}, false)
+	weights := gotorch.NewTensor(randomData(k*n, 13), []int{k, n}, false)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		out := MatMul(a, weights)
+		out := gotorch.MatMul(a, weights)
 		if len(out.Data()) != m*n {
 			b.Fatalf("unexpected output size: got=%d want=%d", len(out.Data()), m*n)
 		}
@@ -17,8 +21,8 @@ func benchmarkMatMulForward(b *testing.B, m, k, n int) {
 }
 
 func benchmarkMatMulBackward(b *testing.B, m, k, n int) {
-	a := NewTensor(randomData(m*k, 17), []int{m, k}, true)
-	weights := NewTensor(randomData(k*n, 19), []int{k, n}, true)
+	a := gotorch.NewTensor(randomData(m*k, 17), []int{m, k}, true)
+	weights := gotorch.NewTensor(randomData(k*n, 19), []int{k, n}, true)
 	upstream := randomData(m*n, 23)
 
 	b.ReportAllocs()
@@ -27,7 +31,7 @@ func benchmarkMatMulBackward(b *testing.B, m, k, n int) {
 		a.ZeroGrad()
 		weights.ZeroGrad()
 
-		out := MatMul(a, weights)
+		out := gotorch.MatMul(a, weights)
 		out.SetGrad(append([]float32(nil), upstream...))
 		out.Backward()
 	}
