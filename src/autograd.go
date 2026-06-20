@@ -1,11 +1,22 @@
 package gotorch
 
+import "fmt"
+
 type Operation interface {
 	Backward(t *Tensor)
 }
 
 func (t *Tensor) Backward() {
 	if t.gradStorage == nil {
+		isScalar := len(t.Shape) == 0 || (len(t.Shape) == 1 && t.Shape[0] == 1)
+
+		if !isScalar {
+			panic(fmt.Sprintf(
+				"cannot autogenerate gradient for non-scalar tensor with shape %v. "+
+					"Call SetGrad() with the appropriate gradient shape before Backward()",
+				t.Shape,
+			))
+		}
 		t.SetGrad([]float32{1.0})
 	}
 	order := []*Tensor{}

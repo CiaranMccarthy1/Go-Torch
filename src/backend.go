@@ -1,6 +1,7 @@
 package gotorch
 
 import (
+	"fmt"
 	"math"
 	"runtime"
 	"sync"
@@ -239,11 +240,19 @@ func (b *NativeBackend) EmbedForward(weights, indices TensorStorage, batch, dim 
 
 	vocabSize := len(weightsData) / dim
 	out := make([]float32, batch*dim)
+
 	for i := 0; i < batch; i++ {
-		idx := int(indicesData[i])
-		if idx < 0 || idx >= vocabSize {
-			panic("embedding index out of range")
+		idxFloat := indicesData[i]
+		idx := int(idxFloat)
+
+		if float32(idx) != idxFloat {
+			panic(fmt.Sprintf("non-integer index at position %d: %f", i, idxFloat))
 		}
+
+		if idx < 0 || idx >= vocabSize {
+			panic(fmt.Sprintf("embedding index %d out of range [0, %d)", idx, vocabSize))
+		}
+
 		copy(out[i*dim:(i+1)*dim], weightsData[idx*dim:(idx+1)*dim])
 	}
 
@@ -261,11 +270,20 @@ func (b *NativeBackend) EmbedBackward(weights, indices, gradOut TensorStorage, b
 
 	vocabSize := len(weightsData) / dim
 	gradWeights := make([]float32, len(weightsData))
+
 	for i := 0; i < batch; i++ {
-		idx := int(indicesData[i])
-		if idx < 0 || idx >= vocabSize {
-			panic("embedding index out of range")
+		idxFloat := indicesData[i]
+		idx := int(idxFloat)
+
+		// Check if it's an integer
+		if float32(idx) != idxFloat {
+			panic(fmt.Sprintf("non-integer index at position %d: %f", i, idxFloat))
 		}
+
+		if idx < 0 || idx >= vocabSize {
+			panic(fmt.Sprintf("embedding index %d out of range [0, %d)", idx, vocabSize))
+		}
+
 		for k := 0; k < dim; k++ {
 			gradWeights[idx*dim+k] += gradOutData[i*dim+k]
 		}

@@ -13,7 +13,13 @@ func (op EmbeddingOp) Backward(t *Tensor) {
 	weightsGrad := weights.ensureGradStorage(shapeSize(weights.Shape))
 
 	batch := indices.Shape[0]
-	gradWeights := backend.EmbedBackward(weights.ensureStorage(), indices.ensureStorage(), t.gradStorage, batch, dim)
+	gradWeights := backend.EmbedBackward(
+		weights.ensureStorage(),
+		indices.ensureStorage(),
+		t.gradStorage,
+		batch,
+		dim,
+	)
 	backend.AddInPlace(weightsGrad, gradWeights)
 }
 
@@ -25,4 +31,13 @@ func Embed(weights, indices *Tensor) *Tensor {
 	res.Op = EmbeddingOp{}
 	res.Parents = []*Tensor{weights, indices}
 	return res
+}
+
+func EmbedInt(weights *Tensor, indices []int) *Tensor {
+	idxData := make([]float32, len(indices))
+	for i, v := range indices {
+		idxData[i] = float32(v)
+	}
+	idxTensor := NewTensor(idxData, []int{len(indices)}, false)
+	return Embed(weights, idxTensor)
 }

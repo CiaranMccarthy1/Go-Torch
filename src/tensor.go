@@ -1,5 +1,7 @@
 package gotorch
 
+import "fmt"
+
 type Tensor struct {
 	storage     TensorStorage
 	gradStorage TensorStorage
@@ -20,6 +22,14 @@ func NewTensorWithBackend(data []float32, shape []int, reqGrad bool, backend Bac
 	}
 
 	size := shapeSize(shape)
+
+	if data != nil && len(data) != size {
+		panic(fmt.Sprintf(
+			"data length mismatch: got %d elements but shape %v requires %d elements",
+			len(data), shape, size,
+		))
+	}
+
 	storage := backend.NewStorage(data, size)
 	return &Tensor{storage: storage, Shape: append([]int(nil), shape...), ReqGrad: reqGrad, Backend: backend}
 }
@@ -28,6 +38,17 @@ func newTensorFromStorage(storage TensorStorage, shape []int, reqGrad bool, back
 	if backend == nil {
 		backend = DefaultBackend()
 	}
+
+	if storage != nil {
+		expectedSize := shapeSize(shape)
+		if len(storage.Data()) != expectedSize {
+			panic(fmt.Sprintf(
+				"storage size mismatch: got %d elements but shape %v requires %d elements",
+				len(storage.Data()), shape, expectedSize,
+			))
+		}
+	}
+
 	return &Tensor{storage: storage, Shape: append([]int(nil), shape...), ReqGrad: reqGrad, Backend: backend}
 }
 
